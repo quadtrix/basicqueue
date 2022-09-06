@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"quadtrix.nl/aesengine"
-	"quadtrix.nl/servicelogger"
+	"github.com/quadtrix/aesengine"
+	"github.com/quadtrix/servicelogger"
 )
 
 type BasicQueueType int
