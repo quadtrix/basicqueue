@@ -1,0 +1,6 @@
+github.com/google/uuid v1.3.0 h1:t6JiXgmwXMjEs8VusXIJk2BXHsn+wx8BZdTaoZ5fu7I=
+github.com/google/uuid v1.3.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+github.com/quadtrix/aesengine v0.0.0-20220906202953-d3c4a0850b26 h1:xNQ186Ru2NgfgRMoLtK1iIGi4jtAodstqHNJ+mqe6ME=
+github.com/quadtrix/aesengine v0.0.0-20220906202953-d3c4a0850b26/go.mod h1:A7fSAFCFxRO+vNvSbh8ocVc2g17eKvNJvp+HFzlmMIA=
+github.com/quadtrix/servicelogger v0.0.0-20220906210303-16c75e1f730b h1:BfgXnLrzzQob8vVYETPZJEYwtTYCtNuXT68JF7XjzEk=
+github.com/quadtrix/servicelogger v0.0.0-20220906210303-16c75e1f730b/go.mod h1:pnmSwIr8KxPbIOMhsIisMWo2HdzNxwdpIRilmAMYwYk=
