@@ -2,5 +2,5 @@ github.com/google/uuid v1.3.0 h1:t6JiXgmwXMjEs8VusXIJk2BXHsn+wx8BZdTaoZ5fu7I=
 github.com/google/uuid v1.3.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/quadtrix/aesengine v0.0.0-20220907055548-598d44c87ea8 h1:odhv8xDihZS1YTDq9c+IlSxxCJx590A/d8rVv0ENZvs=
 github.com/quadtrix/aesengine v0.0.0-20220907055548-598d44c87ea8/go.mod h1:b5iN1GjSIoU+ztXQGk/K1BQR08pI2F4xdRHsMiMd6WY=
-github.com/quadtrix/servicelogger v0.0.0-20220907055633-469e9eadfed7 h1:NfT7idJRlQ0d0cJ0QyRocNFg3C0rC342tQrJXKj3swY=
-github.com/quadtrix/servicelogger v0.0.0-20220907055633-469e9eadfed7/go.mod h1:ITv9L1MAFwu6E+sv6rrAGTzoKD3NRX7Qtcbui9g5QiM=
+github.com/quadtrix/servicelogger v0.0.0-20221003131534-7ba9cadd9093 h1:4U0RPrNTS3LkVD6m1xz9pmQphv2HRisXLN/12I4pazg=
+github.com/quadtrix/servicelogger v0.0.0-20221003131534-7ba9cadd9093/go.mod h1:ITv9L1MAFwu6E+sv6rrAGTzoKD3NRX7Qtcbui9g5QiM=

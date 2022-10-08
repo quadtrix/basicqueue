@@ -256,7 +256,7 @@ func (bq *BasicQueue) AddJsonMessage(identifier string, source string, destinati
 		return errors.New("not a registered producer")
 	}
 	if !bq.isJsonQueue {
-		bq.slog.LogWarn(fmt.Sprintf("AddJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting message from %s (%s). This is a JSON queue. Use method AddMessage instead", source, identifier))
+		bq.slog.LogWarn(fmt.Sprintf("AddJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting message from %s (%s). This is not a JSON queue. Use method AddMessage instead", source, identifier))
 		return errors.New("incorrect method, use AddMessage")
 	}
 	jms := JSonQueueMessage{
