@@ -550,3 +550,7 @@ func (bq *BasicQueue) UnmarshalMessage(marshaled string) (unmarshaled JSonQueueM
 	err = json.Unmarshal([]byte(marshaled), &unmarshaled)
 	return unmarshaled, err
 }
+
+func (bq BasicQueue) GetName() string {
+	return bq.qname
+}
