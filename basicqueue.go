@@ -80,6 +80,7 @@ type BasicQueue struct {
 	AESengine         aesengine.AESEngine
 	isJsonQueue       bool
 	locked            bool
+	maxQueueDepth     int
 }
 
 func (bq BasicQueue) producerExists(identifier string) bool {
@@ -128,12 +129,13 @@ func (bq *BasicQueue) RegisterProducer(identifier string) (err error) {
 	return nil
 }
 
-func NewQueue(slog *servicelogger.Logger, qtype BasicQueueType, qname string, expiration bool, defaultExpirationTime time.Duration) (bq *BasicQueue, err error) {
+func NewQueue(slog *servicelogger.Logger, qtype BasicQueueType, qname string, maxQueueDepth int, expiration bool, defaultExpirationTime time.Duration) (bq *BasicQueue, err error) {
 	bql := BasicQueue{
-		slog:        slog,
-		qtype:       qtype,
-		qname:       qname,
-		isJsonQueue: false,
+		slog:          slog,
+		qtype:         qtype,
+		qname:         qname,
+		maxQueueDepth: maxQueueDepth,
+		isJsonQueue:   false,
 		messages: QueueMessages{
 			encrypted: false,
 			msgCount:  0,
@@ -169,8 +171,8 @@ func NewQueue(slog *servicelogger.Logger, qtype BasicQueueType, qname string, ex
 	return &bql, nil
 }
 
-func NewEncryptedQueue(slog *servicelogger.Logger, qtype BasicQueueType, qname string, expiration bool, defaultExpirationTime time.Duration) (bq *BasicQueue, err error) {
-	bq, err = NewQueue(slog, qtype, qname, expiration, defaultExpirationTime)
+func NewEncryptedQueue(slog *servicelogger.Logger, qtype BasicQueueType, qname string, maxQueueDepth int, expiration bool, defaultExpirationTime time.Duration) (bq *BasicQueue, err error) {
+	bq, err = NewQueue(slog, qtype, qname, maxQueueDepth, expiration, defaultExpirationTime)
 	if err != nil {
 		return bq, err
 	}
@@ -183,8 +185,8 @@ func NewEncryptedQueue(slog *servicelogger.Logger, qtype BasicQueueType, qname s
 	return bq, nil
 }
 
-func NewJsonQueue(slog *servicelogger.Logger, qtype BasicQueueType, qname string, expiration bool, defaultExpirationTime time.Duration) (bq *BasicQueue, err error) {
-	bq, err = NewQueue(slog, qtype, qname, expiration, defaultExpirationTime)
+func NewJsonQueue(slog *servicelogger.Logger, qtype BasicQueueType, qname string, maxQueueDepth int, expiration bool, defaultExpirationTime time.Duration) (bq *BasicQueue, err error) {
+	bq, err = NewQueue(slog, qtype, qname, maxQueueDepth, expiration, defaultExpirationTime)
 	if err != nil {
 		return bq, err
 	}
@@ -192,8 +194,8 @@ func NewJsonQueue(slog *servicelogger.Logger, qtype BasicQueueType, qname string
 	return bq, nil
 }
 
-func NewEncryptedJsonQueue(slog *servicelogger.Logger, qtype BasicQueueType, qname string, expiration bool, defaultExpirationTime time.Duration) (bq *BasicQueue, err error) {
-	bq, err = NewJsonQueue(slog, qtype, qname, expiration, defaultExpirationTime)
+func NewEncryptedJsonQueue(slog *servicelogger.Logger, qtype BasicQueueType, qname string, maxQueueDepth int, expiration bool, defaultExpirationTime time.Duration) (bq *BasicQueue, err error) {
+	bq, err = NewJsonQueue(slog, qtype, qname, maxQueueDepth, expiration, defaultExpirationTime)
 	if err != nil {
 		return bq, err
 	}
@@ -218,6 +220,10 @@ func (bq *BasicQueue) AddMessage(identifier string, messagetext string) (err err
 	if bq.isJsonQueue {
 		bq.slog.LogWarn(fmt.Sprintf("AddMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting message from %s. This is a JSON queue. Use method AddJsonMessage instead", identifier))
 		return errors.New("incorrect method, use AddJsonMessage for JSON queues")
+	}
+	if bq.maxQueueDepth > -1 && bq.messages.msgCount == bq.maxQueueDepth {
+		bq.slog.LogError(fmt.Sprintf("AddMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting message from %s, queue is full", identifier))
+		return errors.New("queue is full")
 	}
 	var exptime time.Time
 	if bq.msgExpire {
@@ -258,6 +264,10 @@ func (bq *BasicQueue) AddJsonMessage(identifier string, source string, destinati
 	if !bq.isJsonQueue {
 		bq.slog.LogWarn(fmt.Sprintf("AddJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting message from %s (%s). This is not a JSON queue. Use method AddMessage instead", source, identifier))
 		return errors.New("incorrect method, use AddMessage")
+	}
+	if bq.maxQueueDepth > -1 && bq.messages.msgCount == bq.maxQueueDepth {
+		bq.slog.LogError(fmt.Sprintf("AddJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting message from %s (%s). Queue is full", source, identifier))
+		return errors.New("queue is full")
 	}
 	jms := JSonQueueMessage{
 		MessageID:   uuid.New().String(),
@@ -488,6 +498,19 @@ func (bq *BasicQueue) readSpecificMessage(index int) (msgtext string, msgid stri
 	return "", "", errors.New(fmt.Sprintf("basicqueue.readSpecificMessage.%s: queue index out of bounds %d>%d", bq.qname, index, bq.messages.msgCount))
 }
 
+func (bq *BasicQueue) ReadSpecificJsonMessage(messageid string) (jqm JSonQueueMessage, err error) {
+	index := -1
+	for n, message := range bq.messages.messages {
+		if message.messageID == messageid {
+			index = n
+		}
+	}
+	if index == -1 {
+		return jqm, errors.New("not found")
+	}
+	return bq.readSpecificJsonMessage(index)
+}
+
 func (bq *BasicQueue) Read(identifier string) (msg string, err error) {
 	if !bq.consumerExists(identifier) {
 		bq.slog.LogWarn(fmt.Sprintf("Read.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting read from %s, not a registered consumer", identifier))
@@ -553,4 +576,16 @@ func (bq *BasicQueue) UnmarshalMessage(marshaled string) (unmarshaled JSonQueueM
 
 func (bq BasicQueue) GetName() string {
 	return bq.qname
+}
+
+func (bq BasicQueue) GetQueueDepth() int {
+	return bq.messages.msgCount
+}
+
+func (bq BasicQueue) GetMessageIds() []string {
+	messageids := []string{}
+	for _, message := range bq.messages.messages {
+		messageids = append(messageids, message.messageID)
+	}
+	return messageids
 }
