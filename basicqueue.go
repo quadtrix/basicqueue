@@ -1,4 +1,4 @@
-//Package basicqueue implements very simple unicast and broadcast message queueing between goroutines
+// Package basicqueue implements very simple unicast and broadcast message queueing between goroutines
 package basicqueue
 
 import (
@@ -80,6 +80,7 @@ type BasicQueue struct {
 	AESengine         aesengine.AESEngine
 	isJsonQueue       bool
 	locked            bool
+	lockedBy          string
 	maxQueueDepth     int
 }
 
@@ -209,20 +210,28 @@ func NewEncryptedJsonQueue(slog *servicelogger.Logger, qtype BasicQueueType, qna
 }
 
 func (bq *BasicQueue) AddMessage(identifier string, messagetext string) (err error) {
-	if bq.locked {
-		bq.slog.LogError(fmt.Sprintf("AddMessage.%s", bq.qname), "basicqueue", "Queue is locked")
-		return errors.New("queue is locked")
+	err = bq.waitForUnlock("AddMessage", 5*time.Second)
+	if err != nil {
+		return err
+	}
+	err = bq.setLock("AddMessage")
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("AddMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Failed to acquire lock: %s", err.Error()))
+		return err
 	}
 	if !bq.producerExists(identifier) {
 		bq.slog.LogWarn(fmt.Sprintf("AddMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting message from %s, not a registered producer", identifier))
+		bq.unsetLock("AddMessage")
 		return errors.New("not a registered producer")
 	}
 	if bq.isJsonQueue {
 		bq.slog.LogWarn(fmt.Sprintf("AddMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting message from %s. This is a JSON queue. Use method AddJsonMessage instead", identifier))
+		bq.unsetLock("AddMessage")
 		return errors.New("incorrect method, use AddJsonMessage for JSON queues")
 	}
 	if bq.maxQueueDepth > -1 && bq.messages.msgCount == bq.maxQueueDepth {
 		bq.slog.LogError(fmt.Sprintf("AddMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting message from %s, queue is full", identifier))
+		bq.unsetLock("AddMessage")
 		return errors.New("queue is full")
 	}
 	var exptime time.Time
@@ -249,24 +258,33 @@ func (bq *BasicQueue) AddMessage(identifier string, messagetext string) (err err
 	bq.messages.messages = append(bq.messages.messages, msg)
 	bq.messages.msgCount++
 	bq.slog.LogTrace(fmt.Sprintf("AddMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Adding message at position %d with ID %s: %s", bq.messages.msgCount-1, msg.messageID, msg.message))
+	bq.unsetLock("AddMessage")
 	return nil
 }
 
 func (bq *BasicQueue) AddJsonMessage(identifier string, source string, destination string, msgtype string, messagetext string) (err error) {
-	if bq.locked {
-		bq.slog.LogError(fmt.Sprintf("AddJsonMessage.%s", bq.qname), "basicqueue", "Queue is locked")
-		return errors.New("queue is locked")
+	err = bq.waitForUnlock("AddJsonMessage", 5*time.Second)
+	if err != nil {
+		return err
+	}
+	err = bq.setLock("AddJsonMessage")
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("AddJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Failed to acquire lock: %s", err.Error()))
+		return err
 	}
 	if !bq.producerExists(identifier) {
 		bq.slog.LogWarn(fmt.Sprintf("AddJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting message from %s (%s), not a registered producer", source, identifier))
+		bq.unsetLock("AddJsonMessage")
 		return errors.New("not a registered producer")
 	}
 	if !bq.isJsonQueue {
 		bq.slog.LogWarn(fmt.Sprintf("AddJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting message from %s (%s). This is not a JSON queue. Use method AddMessage instead", source, identifier))
+		bq.unsetLock("AddJsonMessage")
 		return errors.New("incorrect method, use AddMessage")
 	}
 	if bq.maxQueueDepth > -1 && bq.messages.msgCount == bq.maxQueueDepth {
 		bq.slog.LogError(fmt.Sprintf("AddJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting message from %s (%s). Queue is full", source, identifier))
+		bq.unsetLock("AddJsonMessage")
 		return errors.New("queue is full")
 	}
 	jms := JSonQueueMessage{
@@ -294,6 +312,7 @@ func (bq *BasicQueue) AddJsonMessage(identifier string, source string, destinati
 	}
 	marshaled, err := json.Marshal(jms)
 	if err != nil {
+		bq.unsetLock("AddJsonMessage")
 		return err
 	}
 	msg := QueueMessage{
@@ -306,6 +325,7 @@ func (bq *BasicQueue) AddJsonMessage(identifier string, source string, destinati
 	bq.messages.messages = append(bq.messages.messages, msg)
 	bq.messages.msgCount++
 	bq.slog.LogTrace(fmt.Sprintf("AddJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Adding message from %s to %s (type %s) at position %d with ID %s", jms.Source, jms.Destination, jms.MessageType, bq.messages.msgCount-1, msg.messageID))
+	bq.unsetLock("AddJsonMessage")
 	return nil
 }
 
@@ -343,6 +363,16 @@ func (bq *BasicQueue) PollWithHistory(identifier string, messageIDHistory []stri
 }
 
 func (bq *BasicQueue) removeMessage(index int) {
+	err := bq.waitForUnlock("removeMessage", 5*time.Second)
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("removeMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unlock timeout: %s", err.Error()))
+		return
+	}
+	err = bq.setLock("removeMessage")
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("removeMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Failed to acquire lock: %s", err.Error()))
+		return
+	}
 	if bq.messages.msgCount > index {
 		bq.slog.LogTrace(fmt.Sprintf("removeMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Removing message %s (%d)", bq.messages.messages[index].messageID, index))
 		if index == 0 {
@@ -352,6 +382,7 @@ func (bq *BasicQueue) removeMessage(index int) {
 				bq.messages.messages = []QueueMessage{}
 			}
 			bq.messages.msgCount = len(bq.messages.messages)
+			bq.unsetLock("removeMessage")
 			return
 		}
 		if index == bq.messages.msgCount-1 {
@@ -361,6 +392,7 @@ func (bq *BasicQueue) removeMessage(index int) {
 			bq.messages.messages = append(bq.messages.messages[:index-1], bq.messages.messages[index+1:]...)
 		}
 		bq.messages.msgCount = len(bq.messages.messages)
+		bq.unsetLock("removeMessage")
 	}
 }
 
@@ -374,21 +406,79 @@ func (bq *BasicQueue) loopExpiryCheck() {
 	}
 }
 
+func (bq *BasicQueue) waitForUnlock(caller string, timeout time.Duration) error {
+	timer_start := time.Now()
+	if !bq.locked {
+		return nil
+	} else {
+		bq.slog.LogTrace(fmt.Sprintf("waitForUnlock.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is locked (owner: %s), started wait, timeout: %ds", bq.lockedBy, (int)(timeout.Seconds())))
+
+		for bq.locked {
+			if time.Since(timer_start) > timeout {
+				bq.slog.LogError(fmt.Sprintf("%s(waitForUnlock)", caller), "basicqueue", "Timed out waiting for queue to unlock")
+				return errors.New("timed out waiting for queue to unlock")
+			}
+			time.Sleep(time.Second)
+		}
+	}
+	bq.slog.LogTrace(fmt.Sprintf("waitForUnlock.%s", bq.qname), "basicqueue", fmt.Sprintf("Lock was released in : %dms", (int)(time.Since(timer_start).Milliseconds())))
+	return nil
+}
+
+func (bq *BasicQueue) setLock(caller string) error {
+	if bq.locked {
+		return fmt.Errorf("queue is already locked, owned by %s", bq.lockedBy)
+	}
+	bq.locked = true
+	bq.lockedBy = caller
+	bq.slog.LogTrace(fmt.Sprintf("%s.%s", caller, bq.qname), "basicqueue", fmt.Sprintf("Locked queue by %s", caller))
+	return nil
+}
+
+func (bq *BasicQueue) unsetLock(caller string) error {
+	if !bq.locked {
+		return fmt.Errorf("queue is not locked")
+	}
+	if bq.lockedBy != caller {
+		return fmt.Errorf("not lock owner")
+	}
+	bq.locked = false
+	bq.lockedBy = ""
+	bq.slog.LogTrace(fmt.Sprintf("%s.%s", caller, bq.qname), "basicqueue", "Unlocked queue")
+	return nil
+}
+
 func (bq *BasicQueue) checkForExpiry() {
+	err := bq.waitForUnlock("checkForExpiry", 5*time.Second)
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("checkForExpiry.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
+		return
+	}
 	if bq.messages.msgCount > 0 {
-		bq.locked = true
+		err = bq.setLock("checkForExpiry")
+		if err != nil {
+			bq.slog.LogError(fmt.Sprintf("checkForExpiry.%s", bq.qname), "basicqueue", fmt.Sprintf("Failed to acquire lock: %s", err.Error()))
+			return
+		}
 		//bq.slog.LogTrace(fmt.Sprintf("checkForExpiry.%s", bq.qname), "basicqueue", fmt.Sprintf("Starting message expiration check for queue %s", bq.qname))
 		for i := bq.messages.msgCount - 1; i >= 0; i-- {
-			if bq.messages.messages[i].expires {
-				//bq.slog.LogTrace(fmt.Sprintf("checkForExpiry.%s", bq.qname), "basicqueue", fmt.Sprintf("Message %s expires at %s", bq.messages.messages[i].messageID, bq.messages.messages[i].expiration.Format("2006-01-02 15:04:05")))
-				if time.Now().After(bq.messages.messages[i].expiration) {
-					// Expired message, pop it from the queue
-					//bq.slog.LogTrace(fmt.Sprintf("checkForExpiry.%s", bq.qname), "basicqueue", fmt.Sprintf("Message %s (%d) has expired. Removing it from queue %s", bq.messages.messages[i].messageID, i, bq.qname))
-					bq.removeMessage(i)
+			if bq.messages.msgCount <= i {
+				bq.slog.LogError(fmt.Sprintf("checkForExpiry.%s", bq.qname), "basicqueue", "queue lock not respected, queue is altered while locked")
+			} else {
+				if bq.messages.messages[i].expires {
+					//bq.slog.LogTrace(fmt.Sprintf("checkForExpiry.%s", bq.qname), "basicqueue", fmt.Sprintf("Message %s expires at %s", bq.messages.messages[i].messageID, bq.messages.messages[i].expiration.Format("2006-01-02 15:04:05")))
+					if time.Now().After(bq.messages.messages[i].expiration) {
+						// Expired message, pop it from the queue
+						//bq.slog.LogTrace(fmt.Sprintf("checkForExpiry.%s", bq.qname), "basicqueue", fmt.Sprintf("Message %s (%d) has expired. Removing it from queue %s", bq.messages.messages[i].messageID, i, bq.qname))
+						bq.unsetLock("checkForExpiry")
+						bq.removeMessage(i)
+						bq.setLock("checkForExpiry")
+					}
 				}
 			}
 		}
-		bq.locked = false
+		bq.unsetLock("checkForExpiry")
+		return
 	}
 	bq.slog.LogTrace(fmt.Sprintf("checkForExpiry.%s", bq.qname), "basicqueue", "No messages to check")
 }
@@ -471,7 +561,7 @@ func (bq *BasicQueue) readSpecificJsonMessage(index int) (jqm JSonQueueMessage, 
 		}
 		return jqm, err
 	}
-	return jqm, errors.New(fmt.Sprintf("message index out of bounds [%d] with size [%d]", index, bq.messages.msgCount))
+	return jqm, fmt.Errorf("message index out of bounds [%d] with size [%d]", index, bq.messages.msgCount)
 }
 
 func (bq *BasicQueue) readSpecificMessage(index int) (msgtext string, msgid string, err error) {
@@ -495,7 +585,7 @@ func (bq *BasicQueue) readSpecificMessage(index int) (msgtext string, msgid stri
 		}
 		return msgtext, msgid, nil
 	}
-	return "", "", errors.New(fmt.Sprintf("basicqueue.readSpecificMessage.%s: queue index out of bounds %d>%d", bq.qname, index, bq.messages.msgCount))
+	return "", "", fmt.Errorf("basicqueue.readSpecificMessage.%s: queue index out of bounds %d>%d", bq.qname, index, bq.messages.msgCount)
 }
 
 func (bq *BasicQueue) ReadSpecificJsonMessage(messageid string) (jqm JSonQueueMessage, err error) {
@@ -516,7 +606,7 @@ func (bq *BasicQueue) Read(identifier string) (msg string, err error) {
 		bq.slog.LogWarn(fmt.Sprintf("Read.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting read from %s, not a registered consumer", identifier))
 	}
 	if bq.messages.msgCount == 0 {
-		return "", errors.New(fmt.Sprintf("[Read.%s] nl.quadtrix.delta.basicqueue no messages in queue", bq.qname))
+		return "", fmt.Errorf("[Read.%s] nl.quadtrix.delta.basicqueue no messages in queue", bq.qname)
 	}
 	return bq.readFirstMessage(), nil
 }
@@ -543,7 +633,7 @@ func (bq *BasicQueue) ReadJsonWithHistory(identifier string, messageIDHistory []
 			return bq.readSpecificJsonMessage(index)
 		}
 	}
-	return jqm, errors.New("No unread messages in queue")
+	return jqm, errors.New("no unread messages in queue")
 }
 
 func (bq *BasicQueue) ReadWithHistory(identifier string, messageIDHistory []string) (msg string, msgid string, err error) {
@@ -551,14 +641,14 @@ func (bq *BasicQueue) ReadWithHistory(identifier string, messageIDHistory []stri
 		bq.slog.LogWarn(fmt.Sprintf("ReadWithHistory.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting read from %s, not a registered consumer", identifier))
 	}
 	if bq.messages.msgCount == 0 {
-		return "", "", errors.New(fmt.Sprintf("[ReadWithHistory.%s] nl.quadtrix.delta.basicqueue no messages in queue", bq.qname))
+		return "", "", fmt.Errorf("[ReadWithHistory.%s] nl.quadtrix.delta.basicqueue no messages in queue", bq.qname)
 	}
 	for index, message := range bq.messages.messages {
 		if !bq.isInHistory(message.messageID, messageIDHistory) {
 			return bq.readSpecificMessage(index)
 		}
 	}
-	return "", "", errors.New(fmt.Sprintf("basicqueue.ReadWithHistory.%s: No unread messages in queue", bq.qname))
+	return "", "", fmt.Errorf("basicqueue.ReadWithHistory.%s: No unread messages in queue", bq.qname)
 }
 
 func (bq BasicQueue) QStats(identifier string) (msgcount int, numproducers int, numconsumers int, encrypted bool, err error) {
