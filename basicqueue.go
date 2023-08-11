@@ -330,13 +330,25 @@ func (bq *BasicQueue) AddJsonMessage(identifier string, source string, destinati
 }
 
 func (bq *BasicQueue) Poll(identifier string) bool {
+	err := bq.waitForUnlock("Poll", 5*time.Second)
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("Poll.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
+		return false
+	}
+	err = bq.setLock("Poll")
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("Poll.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
+	}
 	if !bq.consumerExists(identifier) {
 		bq.slog.LogWarn(fmt.Sprintf("Poll.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting poll from %s, not a registered consumer", identifier))
+		bq.unsetLock("Poll")
 		return false
 	}
 	if bq.messages.msgCount > 0 {
+		bq.unsetLock("Poll")
 		return true
 	}
+	bq.unsetLock("Poll")
 	return false
 }
 
@@ -350,15 +362,27 @@ func (bq BasicQueue) isInHistory(messageID string, messageIDHistory []string) bo
 }
 
 func (bq *BasicQueue) PollWithHistory(identifier string, messageIDHistory []string) bool {
+	err := bq.waitForUnlock("PollWithHistory", 5*time.Second)
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("PollWithHistory.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
+		return false
+	}
+	err = bq.setLock("PollWithHistory")
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("PollWithHistory.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
+	}
 	if !bq.consumerExists(identifier) {
 		bq.slog.LogWarn(fmt.Sprintf("PollWithHistory.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting poll from %s, not a registered consumer", identifier))
+		bq.unsetLock("PollWithHistory")
 		return false
 	}
 	for _, message := range bq.messages.messages {
 		if !bq.isInHistory(message.messageID, messageIDHistory) {
+			bq.unsetLock("PollWithHistory")
 			return true
 		}
 	}
+	bq.unsetLock("PollWithHistory")
 	return false
 }
 
@@ -408,10 +432,11 @@ func (bq *BasicQueue) loopExpiryCheck() {
 
 func (bq *BasicQueue) waitForUnlock(caller string, timeout time.Duration) error {
 	timer_start := time.Now()
+	oldowner := bq.lockedBy
 	if !bq.locked {
 		return nil
 	} else {
-		bq.slog.LogTrace(fmt.Sprintf("waitForUnlock.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is locked (owner: %s), started wait, timeout: %ds", bq.lockedBy, (int)(timeout.Seconds())))
+		bq.slog.LogTrace(fmt.Sprintf("waitForUnlock.%s", bq.qname), "basicqueue", fmt.Sprintf("Process %s is waiting for queue to unlock (owner: %s), timeout: %ds", caller, bq.lockedBy, (int)(timeout.Seconds())))
 
 		for bq.locked {
 			if time.Since(timer_start) > timeout {
@@ -421,7 +446,7 @@ func (bq *BasicQueue) waitForUnlock(caller string, timeout time.Duration) error 
 			time.Sleep(time.Second)
 		}
 	}
-	bq.slog.LogTrace(fmt.Sprintf("waitForUnlock.%s", bq.qname), "basicqueue", fmt.Sprintf("Lock was released in : %dms", (int)(time.Since(timer_start).Milliseconds())))
+	bq.slog.LogTrace(fmt.Sprintf("waitForUnlock.%s", bq.qname), "basicqueue", fmt.Sprintf("Lock was released by %s in : %dms", oldowner, (int)(time.Since(timer_start).Milliseconds())))
 	return nil
 }
 
@@ -444,7 +469,7 @@ func (bq *BasicQueue) unsetLock(caller string) error {
 	}
 	bq.locked = false
 	bq.lockedBy = ""
-	bq.slog.LogTrace(fmt.Sprintf("%s.%s", caller, bq.qname), "basicqueue", "Unlocked queue")
+	bq.slog.LogTrace(fmt.Sprintf("%s.%s", caller, bq.qname), "basicqueue", fmt.Sprintf("Unlocked queue by %s", caller))
 	return nil
 }
 
@@ -484,13 +509,27 @@ func (bq *BasicQueue) checkForExpiry() {
 }
 
 func (bq *BasicQueue) readFirstMessage() string {
+	err := bq.waitForUnlock("readFirstMessage", 5*time.Second)
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("readFirstMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
+		return ""
+	}
+	err = bq.setLock("readFirstMessage")
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("readFirstMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
+	}
 	var msgtext string
 	if bq.messages.msgCount > 0 {
 		bq.slog.LogTrace(fmt.Sprintf("readFirstMessage.%s", bq.qname), "basicqueue", "Reading message 0")
 		msgtext = bq.messages.messages[0].message
 		msgID := bq.messages.messages[0].messageID
 		if bq.messages.messages[0].popOnRead {
+			bq.unsetLock("readFirstMessage")
 			bq.removeMessage(0)
+			err = bq.setLock("readFirstMessage")
+			if err != nil {
+				bq.slog.LogError(fmt.Sprintf("readFirstMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to re-acquire queue lock: %s", err.Error()))
+			}
 		}
 		if bq.messages.encrypted {
 			b64Decoded, err := base64.StdEncoding.DecodeString(msgtext)
@@ -503,50 +542,86 @@ func (bq *BasicQueue) readFirstMessage() string {
 			}
 			msgtext = string(decBytes)
 		}
+		bq.unsetLock("readFirstMessage")
 		return msgtext
 	}
+	bq.unsetLock("readFirstMessage")
 	return ""
 }
 
 func (bq *BasicQueue) readFirstJsonMessage() (jqm JSonQueueMessage, err error) {
+	err = bq.waitForUnlock("readFirstJsonMessage", 5*time.Second)
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("readFirstJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
+		return JSonQueueMessage{}, err
+	}
+	err = bq.setLock("readFirstJsonMessage")
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("readFirstMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
+	}
 	if bq.messages.msgCount > 0 {
 		bq.slog.LogTrace(fmt.Sprintf("readFirstJsonMessage.%s", bq.qname), "basicqueue", "Reading message 0")
 		err = json.Unmarshal([]byte(bq.messages.messages[0].message), &jqm)
 		if err != nil {
 			bq.slog.LogError(fmt.Sprintf("readFirstJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to unmarshal message %s", bq.messages.messages[0].messageID))
+			bq.unsetLock("readFirstJsonMessage")
 			return jqm, err
 		}
 		if bq.messages.messages[0].popOnRead {
+			bq.unsetLock("readFirstJsonMessage")
 			bq.removeMessage(0)
+			err = bq.setLock("readFirstJsonMessage")
+			if err != nil {
+				bq.slog.LogError(fmt.Sprintf("readFirstMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
+			}
 		}
 		if bq.messages.encrypted {
 			b64Decoded, err := base64.StdEncoding.DecodeString(jqm.Payload)
 			if err != nil {
 				bq.slog.LogError(fmt.Sprintf("readFirstJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Failed to decode message %s", jqm.MessageID))
+				bq.unsetLock("readFirstJsonMessage")
 				return jqm, err
 			}
 			decBytes, err := bq.AESengine.Decrypt(b64Decoded)
 			if err != nil {
 				bq.slog.LogError(fmt.Sprintf("readFirstJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Failed to decrypt message %s", jqm.MessageID))
+				bq.unsetLock("readFirstJsonMessage")
 				return jqm, err
 			}
 			jqm.Payload = string(decBytes)
 		}
+		bq.unsetLock("readFirstJsonMessage")
 		return jqm, err
 	}
+	bq.unsetLock("readFirstJsonMessage")
 	return jqm, errors.New("no messages in queue")
 }
 
 func (bq *BasicQueue) readSpecificJsonMessage(index int) (jqm JSonQueueMessage, err error) {
+	err = bq.waitForUnlock("readSpecificJsonMessage", 5*time.Second)
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("readSpecificJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
+		return JSonQueueMessage{}, err
+	}
+	err = bq.setLock("readSpecificJsonMessage")
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("readSpecificMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
+	}
 	if bq.messages.msgCount > index {
 		bq.slog.LogTrace(fmt.Sprintf("readSpecificJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Reading message %d", index))
 		err := json.Unmarshal([]byte(bq.messages.messages[index].message), &jqm)
 		if err != nil {
 			bq.slog.LogError(fmt.Sprintf("readSpecificJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to unmarshal message %s", bq.messages.messages[index].messageID))
+			bq.unsetLock("readSpecificJsonMessage")
 			return jqm, err
 		}
 		if bq.messages.messages[index].popOnRead {
+			bq.unsetLock("readSpecificJsonMessage")
 			bq.removeMessage(index)
+			err = bq.setLock("readSpecificJsonMessage")
+			if err != nil {
+				bq.slog.LogError(fmt.Sprintf("readSpecificMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to re-acquire queue lock: %s", err.Error()))
+			}
 		}
 		if bq.messages.encrypted {
 			b64Decoded, err := base64.StdEncoding.DecodeString(jqm.Payload)
@@ -559,18 +634,34 @@ func (bq *BasicQueue) readSpecificJsonMessage(index int) (jqm JSonQueueMessage, 
 			}
 			jqm.Payload = string(decBytes)
 		}
+		bq.unsetLock("readSpecificJsonMessage")
 		return jqm, err
 	}
+	bq.unsetLock("readSpcecificJsonMessage")
 	return jqm, fmt.Errorf("message index out of bounds [%d] with size [%d]", index, bq.messages.msgCount)
 }
 
 func (bq *BasicQueue) readSpecificMessage(index int) (msgtext string, msgid string, err error) {
+	err = bq.waitForUnlock("readSpecificMessage", 5*time.Second)
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("readSpecificMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
+		return "", "", err
+	}
+	err = bq.setLock("readSpecificMessage")
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("readSpecificMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
+	}
 	if bq.messages.msgCount > index {
 		bq.slog.LogTrace(fmt.Sprintf("readSpecificMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Reading message %d", index))
 		msgtext = bq.messages.messages[index].message
 		msgid = bq.messages.messages[index].messageID
 		if bq.messages.messages[index].popOnRead {
+			bq.unsetLock("readSpecificMessage")
 			bq.removeMessage(index)
+			err = bq.setLock("readSpecificMessage")
+			if err != nil {
+				bq.slog.LogError(fmt.Sprintf("readSpecificMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to re-acquire queue lock: %s", err.Error()))
+			}
 		}
 		if bq.messages.encrypted {
 			b64Decoded, err := base64.StdEncoding.DecodeString(msgtext)
@@ -583,12 +674,23 @@ func (bq *BasicQueue) readSpecificMessage(index int) (msgtext string, msgid stri
 			}
 			msgtext = string(decBytes)
 		}
+		bq.unsetLock("readSpecificMessage")
 		return msgtext, msgid, nil
 	}
+	bq.unsetLock("readSpecificMessage")
 	return "", "", fmt.Errorf("basicqueue.readSpecificMessage.%s: queue index out of bounds %d>%d", bq.qname, index, bq.messages.msgCount)
 }
 
 func (bq *BasicQueue) ReadSpecificJsonMessage(messageid string) (jqm JSonQueueMessage, err error) {
+	err = bq.waitForUnlock("ReadSpecificJsonMessage", 5*time.Second)
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("ReadSpecificJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
+		return JSonQueueMessage{}, err
+	}
+	err = bq.setLock("ReadSpecificJsonMessage")
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("ReadSpecificJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
+	}
 	index := -1
 	for n, message := range bq.messages.messages {
 		if message.messageID == messageid {
@@ -596,58 +698,106 @@ func (bq *BasicQueue) ReadSpecificJsonMessage(messageid string) (jqm JSonQueueMe
 		}
 	}
 	if index == -1 {
+		bq.unsetLock("ReadSpecificJsonMessage")
 		return jqm, errors.New("not found")
 	}
+	bq.unsetLock("ReadSpecificJsonMessage")
 	return bq.readSpecificJsonMessage(index)
 }
 
 func (bq *BasicQueue) Read(identifier string) (msg string, err error) {
+	err = bq.waitForUnlock("Read", 5*time.Second)
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("Read.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
+		return "", err
+	}
+	err = bq.setLock("Read")
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("Read.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
+	}
 	if !bq.consumerExists(identifier) {
 		bq.slog.LogWarn(fmt.Sprintf("Read.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting read from %s, not a registered consumer", identifier))
 	}
 	if bq.messages.msgCount == 0 {
+		bq.unsetLock("Read")
 		return "", fmt.Errorf("[Read.%s] nl.quadtrix.delta.basicqueue no messages in queue", bq.qname)
 	}
+	bq.unsetLock("Read")
 	return bq.readFirstMessage(), nil
 }
 
 func (bq *BasicQueue) ReadJson(identifier string) (jqm JSonQueueMessage, err error) {
+	err = bq.waitForUnlock("ReadJson", 5*time.Second)
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("ReadJson.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
+		return JSonQueueMessage{}, err
+	}
+	err = bq.setLock("ReadJson")
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("ReadJson.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
+	}
 	if !bq.consumerExists(identifier) {
 		bq.slog.LogWarn(fmt.Sprintf("ReadJson.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting read from %s, not a registered consumer", identifier))
 	}
 	if bq.messages.msgCount == 0 {
+		bq.unsetLock("ReadJson")
 		return jqm, errors.New("no messages in queue")
 	}
+	bq.unsetLock("ReadJson")
 	return bq.readFirstJsonMessage()
 }
 
 func (bq *BasicQueue) ReadJsonWithHistory(identifier string, messageIDHistory []string) (jqm JSonQueueMessage, err error) {
+	err = bq.waitForUnlock("ReadJsonWithHistory", 5*time.Second)
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("ReadJsonWithHistory.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
+		return JSonQueueMessage{}, err
+	}
+	err = bq.setLock("ReadJsonWithHistory")
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("ReadJsonWithHistory.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
+	}
 	if !bq.consumerExists(identifier) {
 		bq.slog.LogWarn(fmt.Sprintf("ReadJsonWithHistory.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting read from %s, not a registered consumer", identifier))
 	}
 	if bq.messages.msgCount == 0 {
+		bq.unsetLock("ReadJsonWithHistory")
 		return jqm, errors.New("no messages in queue")
 	}
 	for index, message := range bq.messages.messages {
 		if !bq.isInHistory(message.messageID, messageIDHistory) {
+			bq.unsetLock("ReadJsonWithHistory")
 			return bq.readSpecificJsonMessage(index)
 		}
 	}
+	bq.unsetLock("ReadJsonWithHistory")
 	return jqm, errors.New("no unread messages in queue")
 }
 
 func (bq *BasicQueue) ReadWithHistory(identifier string, messageIDHistory []string) (msg string, msgid string, err error) {
+	err = bq.waitForUnlock("ReadWithHistory", 5*time.Second)
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("ReadWithHistory.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
+		return "", "", err
+	}
+	err = bq.setLock("ReadWithHistory")
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("ReadWithHistory.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
+	}
 	if !bq.consumerExists(identifier) {
 		bq.slog.LogWarn(fmt.Sprintf("ReadWithHistory.%s", bq.qname), "basicqueue", fmt.Sprintf("Rejecting read from %s, not a registered consumer", identifier))
 	}
 	if bq.messages.msgCount == 0 {
+		bq.unsetLock("ReadWithHistory")
 		return "", "", fmt.Errorf("[ReadWithHistory.%s] nl.quadtrix.delta.basicqueue no messages in queue", bq.qname)
 	}
 	for index, message := range bq.messages.messages {
 		if !bq.isInHistory(message.messageID, messageIDHistory) {
+			bq.unsetLock("ReadWithHistory")
 			return bq.readSpecificMessage(index)
 		}
 	}
+	bq.unsetLock("ReadWithHistory")
 	return "", "", fmt.Errorf("basicqueue.ReadWithHistory.%s: No unread messages in queue", bq.qname)
 }
 
@@ -673,9 +823,19 @@ func (bq BasicQueue) GetQueueDepth() int {
 }
 
 func (bq BasicQueue) GetMessageIds() []string {
+	err := bq.waitForUnlock("GetMessageIds", 5*time.Second)
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("GetMessageIds.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
+		return []string{}
+	}
+	err = bq.setLock("GetMessageIds")
+	if err != nil {
+		bq.slog.LogError(fmt.Sprintf("GetMessageIds.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
+	}
 	messageids := []string{}
 	for _, message := range bq.messages.messages {
 		messageids = append(messageids, message.messageID)
 	}
+	bq.unsetLock("GetMessageIds")
 	return messageids
 }
