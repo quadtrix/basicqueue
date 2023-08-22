@@ -451,12 +451,16 @@ func (bq *BasicQueue) waitForUnlock(caller string, timeout time.Duration) error 
 }
 
 func (bq *BasicQueue) setLock(caller string) error {
-	if bq.locked {
+	if bq.locked && caller != bq.lockedBy {
 		return fmt.Errorf("queue is already locked, owned by %s", bq.lockedBy)
 	}
-	bq.locked = true
-	bq.lockedBy = caller
-	bq.slog.LogTrace(fmt.Sprintf("%s.%s", caller, bq.qname), "basicqueue", fmt.Sprintf("Locked queue by %s", caller))
+	if caller != bq.lockedBy {
+		bq.locked = true
+		bq.lockedBy = caller
+		bq.slog.LogTrace(fmt.Sprintf("%s.%s", caller, bq.qname), "basicqueue", fmt.Sprintf("Locked queue by %s", caller))
+	} else {
+		bq.slog.LogTrace(fmt.Sprintf("%s.%s", caller, bq.qname), "basicqueue", fmt.Sprintf("%s requested to lock queue (current owner), not re-locking queue already locked by this caller", caller))
+	}
 	return nil
 }
 
