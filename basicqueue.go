@@ -440,8 +440,8 @@ func (bq *BasicQueue) waitForUnlock(caller string, timeout time.Duration) error 
 
 		for bq.locked {
 			if time.Since(timer_start) > timeout {
-				bq.slog.LogError(fmt.Sprintf("%s(waitForUnlock)", caller), "basicqueue", "Timed out waiting for queue to unlock")
-				return errors.New("timed out waiting for queue to unlock")
+				bq.slog.LogError(fmt.Sprintf("%s(waitForUnlock)", caller), "basicqueue", fmt.Sprintf("Timed out waiting for queue to unlock. Lock owner %s did not release the lock within %ds", bq.lockedBy, int(timeout.Seconds())))
+				return fmt.Errorf("timed out waiting for queue to unlock (lock owner: %s)", bq.lockedBy)
 			}
 			time.Sleep(time.Second)
 		}
