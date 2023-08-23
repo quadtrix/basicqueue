@@ -436,6 +436,9 @@ func (bq *BasicQueue) waitForUnlock(caller string, timeout time.Duration) error 
 	if !bq.locked {
 		return nil
 	} else {
+		if caller == bq.lockedBy {
+			return nil
+		}
 		bq.slog.LogTrace(fmt.Sprintf("waitForUnlock.%s", bq.qname), "basicqueue", fmt.Sprintf("Process %s is waiting for queue to unlock (owner: %s), timeout: %ds", caller, bq.lockedBy, (int)(timeout.Seconds())))
 
 		for bq.locked {
