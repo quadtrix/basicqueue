@@ -429,6 +429,13 @@ func (bq *BasicQueue) loopExpiryCheck() {
 		bq.checkForExpiry()
 	}
 }
+func (bq *BasicQueue) waitSetLock(caller string, timeout time.Duration) error {
+	err := bq.waitForUnlock(caller, timeout)
+	if err != nil {
+		return err
+	}
+	return bq.setLock(caller)
+}
 
 func (bq *BasicQueue) waitForUnlock(caller string, timeout time.Duration) error {
 	timer_start := time.Now()
@@ -481,13 +488,8 @@ func (bq *BasicQueue) unsetLock(caller string) error {
 }
 
 func (bq *BasicQueue) checkForExpiry() {
-	err := bq.waitForUnlock("checkForExpiry", 5*time.Second)
-	if err != nil {
-		bq.slog.LogError(fmt.Sprintf("checkForExpiry.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
-		return
-	}
 	if bq.messages.msgCount > 0 {
-		err = bq.setLock("checkForExpiry")
+		err := bq.waitSetLock("checkForExpiry", 5*time.Second)
 		if err != nil {
 			bq.slog.LogError(fmt.Sprintf("checkForExpiry.%s", bq.qname), "basicqueue", fmt.Sprintf("Failed to acquire lock: %s", err.Error()))
 			return
@@ -504,7 +506,7 @@ func (bq *BasicQueue) checkForExpiry() {
 						//bq.slog.LogTrace(fmt.Sprintf("checkForExpiry.%s", bq.qname), "basicqueue", fmt.Sprintf("Message %s (%d) has expired. Removing it from queue %s", bq.messages.messages[i].messageID, i, bq.qname))
 						bq.unsetLock("checkForExpiry")
 						bq.removeMessage(i)
-						bq.setLock("checkForExpiry")
+						bq.waitSetLock("checkForExpiry", 5*time.Second)
 					}
 				}
 			}
@@ -516,12 +518,7 @@ func (bq *BasicQueue) checkForExpiry() {
 }
 
 func (bq *BasicQueue) readFirstMessage() string {
-	err := bq.waitForUnlock("readFirstMessage", 5*time.Second)
-	if err != nil {
-		bq.slog.LogError(fmt.Sprintf("readFirstMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
-		return ""
-	}
-	err = bq.setLock("readFirstMessage")
+	err := bq.waitSetLock("readFirstMessage", 5*time.Second)
 	if err != nil {
 		bq.slog.LogError(fmt.Sprintf("readFirstMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
 	}
@@ -533,7 +530,7 @@ func (bq *BasicQueue) readFirstMessage() string {
 		if bq.messages.messages[0].popOnRead {
 			bq.unsetLock("readFirstMessage")
 			bq.removeMessage(0)
-			err = bq.setLock("readFirstMessage")
+			err = bq.waitSetLock("readFirstMessage", 5*time.Second)
 			if err != nil {
 				bq.slog.LogError(fmt.Sprintf("readFirstMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to re-acquire queue lock: %s", err.Error()))
 			}
@@ -557,12 +554,7 @@ func (bq *BasicQueue) readFirstMessage() string {
 }
 
 func (bq *BasicQueue) readFirstJsonMessage() (jqm JSonQueueMessage, err error) {
-	err = bq.waitForUnlock("readFirstJsonMessage", 5*time.Second)
-	if err != nil {
-		bq.slog.LogError(fmt.Sprintf("readFirstJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
-		return JSonQueueMessage{}, err
-	}
-	err = bq.setLock("readFirstJsonMessage")
+	err = bq.waitSetLock("readFirstJsonMessage", 5*time.Second)
 	if err != nil {
 		bq.slog.LogError(fmt.Sprintf("readFirstMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
 	}
@@ -577,7 +569,7 @@ func (bq *BasicQueue) readFirstJsonMessage() (jqm JSonQueueMessage, err error) {
 		if bq.messages.messages[0].popOnRead {
 			bq.unsetLock("readFirstJsonMessage")
 			bq.removeMessage(0)
-			err = bq.setLock("readFirstJsonMessage")
+			err = bq.waitSetLock("readFirstJsonMessage", 5*time.Second)
 			if err != nil {
 				bq.slog.LogError(fmt.Sprintf("readFirstMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
 			}
@@ -605,12 +597,7 @@ func (bq *BasicQueue) readFirstJsonMessage() (jqm JSonQueueMessage, err error) {
 }
 
 func (bq *BasicQueue) readSpecificJsonMessage(index int) (jqm JSonQueueMessage, err error) {
-	err = bq.waitForUnlock("readSpecificJsonMessage", 5*time.Second)
-	if err != nil {
-		bq.slog.LogError(fmt.Sprintf("readSpecificJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
-		return JSonQueueMessage{}, err
-	}
-	err = bq.setLock("readSpecificJsonMessage")
+	err = bq.waitSetLock("readSpecificJsonMessage", 5*time.Second)
 	if err != nil {
 		bq.slog.LogError(fmt.Sprintf("readSpecificMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
 	}
@@ -625,7 +612,7 @@ func (bq *BasicQueue) readSpecificJsonMessage(index int) (jqm JSonQueueMessage, 
 		if bq.messages.messages[index].popOnRead {
 			bq.unsetLock("readSpecificJsonMessage")
 			bq.removeMessage(index)
-			err = bq.setLock("readSpecificJsonMessage")
+			err = bq.waitSetLock("readSpecificJsonMessage", 5*time.Second)
 			if err != nil {
 				bq.slog.LogError(fmt.Sprintf("readSpecificMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to re-acquire queue lock: %s", err.Error()))
 			}
@@ -649,12 +636,7 @@ func (bq *BasicQueue) readSpecificJsonMessage(index int) (jqm JSonQueueMessage, 
 }
 
 func (bq *BasicQueue) readSpecificMessage(index int) (msgtext string, msgid string, err error) {
-	err = bq.waitForUnlock("readSpecificMessage", 5*time.Second)
-	if err != nil {
-		bq.slog.LogError(fmt.Sprintf("readSpecificMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
-		return "", "", err
-	}
-	err = bq.setLock("readSpecificMessage")
+	err = bq.waitSetLock("readSpecificMessage", 5*time.Second)
 	if err != nil {
 		bq.slog.LogError(fmt.Sprintf("readSpecificMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
 	}
@@ -665,7 +647,7 @@ func (bq *BasicQueue) readSpecificMessage(index int) (msgtext string, msgid stri
 		if bq.messages.messages[index].popOnRead {
 			bq.unsetLock("readSpecificMessage")
 			bq.removeMessage(index)
-			err = bq.setLock("readSpecificMessage")
+			err = bq.waitSetLock("readSpecificMessage", 5*time.Second)
 			if err != nil {
 				bq.slog.LogError(fmt.Sprintf("readSpecificMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to re-acquire queue lock: %s", err.Error()))
 			}
@@ -689,12 +671,7 @@ func (bq *BasicQueue) readSpecificMessage(index int) (msgtext string, msgid stri
 }
 
 func (bq *BasicQueue) ReadSpecificJsonMessage(messageid string) (jqm JSonQueueMessage, err error) {
-	err = bq.waitForUnlock("ReadSpecificJsonMessage", 5*time.Second)
-	if err != nil {
-		bq.slog.LogError(fmt.Sprintf("ReadSpecificJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
-		return JSonQueueMessage{}, err
-	}
-	err = bq.setLock("ReadSpecificJsonMessage")
+	err = bq.waitSetLock("ReadSpecificJsonMessage", 5*time.Second)
 	if err != nil {
 		bq.slog.LogError(fmt.Sprintf("ReadSpecificJsonMessage.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
 	}
@@ -713,12 +690,7 @@ func (bq *BasicQueue) ReadSpecificJsonMessage(messageid string) (jqm JSonQueueMe
 }
 
 func (bq *BasicQueue) Read(identifier string) (msg string, err error) {
-	err = bq.waitForUnlock("Read", 5*time.Second)
-	if err != nil {
-		bq.slog.LogError(fmt.Sprintf("Read.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
-		return "", err
-	}
-	err = bq.setLock("Read")
+	err = bq.waitSetLock("Read", 5*time.Second)
 	if err != nil {
 		bq.slog.LogError(fmt.Sprintf("Read.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
 	}
@@ -734,12 +706,7 @@ func (bq *BasicQueue) Read(identifier string) (msg string, err error) {
 }
 
 func (bq *BasicQueue) ReadJson(identifier string) (jqm JSonQueueMessage, err error) {
-	err = bq.waitForUnlock("ReadJson", 5*time.Second)
-	if err != nil {
-		bq.slog.LogError(fmt.Sprintf("ReadJson.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
-		return JSonQueueMessage{}, err
-	}
-	err = bq.setLock("ReadJson")
+	err = bq.waitSetLock("ReadJson", 5*time.Second)
 	if err != nil {
 		bq.slog.LogError(fmt.Sprintf("ReadJson.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
 	}
@@ -755,12 +722,7 @@ func (bq *BasicQueue) ReadJson(identifier string) (jqm JSonQueueMessage, err err
 }
 
 func (bq *BasicQueue) ReadJsonWithHistory(identifier string, messageIDHistory []string) (jqm JSonQueueMessage, err error) {
-	err = bq.waitForUnlock("ReadJsonWithHistory", 5*time.Second)
-	if err != nil {
-		bq.slog.LogError(fmt.Sprintf("ReadJsonWithHistory.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
-		return JSonQueueMessage{}, err
-	}
-	err = bq.setLock("ReadJsonWithHistory")
+	err = bq.waitSetLock("ReadJsonWithHistory", 5*time.Second)
 	if err != nil {
 		bq.slog.LogError(fmt.Sprintf("ReadJsonWithHistory.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
 	}
@@ -782,12 +744,7 @@ func (bq *BasicQueue) ReadJsonWithHistory(identifier string, messageIDHistory []
 }
 
 func (bq *BasicQueue) ReadWithHistory(identifier string, messageIDHistory []string) (msg string, msgid string, err error) {
-	err = bq.waitForUnlock("ReadWithHistory", 5*time.Second)
-	if err != nil {
-		bq.slog.LogError(fmt.Sprintf("ReadWithHistory.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
-		return "", "", err
-	}
-	err = bq.setLock("ReadWithHistory")
+	err = bq.waitSetLock("ReadWithHistory", 5*time.Second)
 	if err != nil {
 		bq.slog.LogError(fmt.Sprintf("ReadWithHistory.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
 	}
@@ -830,14 +787,10 @@ func (bq BasicQueue) GetQueueDepth() int {
 }
 
 func (bq BasicQueue) GetMessageIds() []string {
-	err := bq.waitForUnlock("GetMessageIds", 5*time.Second)
-	if err != nil {
-		bq.slog.LogError(fmt.Sprintf("GetMessageIds.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
-		return []string{}
-	}
-	err = bq.setLock("GetMessageIds")
+	err := bq.waitSetLock("GetMessageIds", 5*time.Second)
 	if err != nil {
 		bq.slog.LogError(fmt.Sprintf("GetMessageIds.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
+		return []string{}
 	}
 	messageids := []string{}
 	for _, message := range bq.messages.messages {
