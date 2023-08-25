@@ -362,12 +362,7 @@ func (bq BasicQueue) isInHistory(messageID string, messageIDHistory []string) bo
 }
 
 func (bq *BasicQueue) PollWithHistory(identifier string, messageIDHistory []string) bool {
-	err := bq.waitForUnlock("PollWithHistory", 5*time.Second)
-	if err != nil {
-		bq.slog.LogError(fmt.Sprintf("PollWithHistory.%s", bq.qname), "basicqueue", fmt.Sprintf("Queue is still locked: %s", err.Error()))
-		return false
-	}
-	err = bq.setLock("PollWithHistory")
+	err := bq.waitSetLock("PollWithHistory", 5*time.Second)
 	if err != nil {
 		bq.slog.LogError(fmt.Sprintf("PollWithHistory.%s", bq.qname), "basicqueue", fmt.Sprintf("Unable to acquire queue lock: %s", err.Error()))
 	}
