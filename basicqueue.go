@@ -498,7 +498,7 @@ func (bq *BasicQueue) checkForExpiry() {
 					//bq.slog.LogTrace(fmt.Sprintf("checkForExpiry.%s", bq.qname), "basicqueue", fmt.Sprintf("Message %s expires at %s", bq.messages.messages[i].messageID, bq.messages.messages[i].expiration.Format("2006-01-02 15:04:05")))
 					if time.Now().After(bq.messages.messages[i].expiration) {
 						// Expired message, pop it from the queue
-						//bq.slog.LogTrace(fmt.Sprintf("checkForExpiry.%s", bq.qname), "basicqueue", fmt.Sprintf("Message %s (%d) has expired. Removing it from queue %s", bq.messages.messages[i].messageID, i, bq.qname))
+						bq.slog.LogTrace(fmt.Sprintf("checkForExpiry.%s", bq.qname), "basicqueue", fmt.Sprintf("Message %s (%d) has expired. Removing it from queue %s", bq.messages.messages[i].messageID, i, bq.qname))
 						bq.unsetLock("checkForExpiry")
 						bq.removeMessage(i)
 						bq.waitSetLock("checkForExpiry", 5*time.Second)
